@@ -175,15 +175,17 @@ void taskReport(uint32_t now) {
 void setup() {
   Serial.begin(115200);
 
-  /* สำคัญ : ต้อง digitalWrite() ให้เป็น OFF ก่อน pinMode(OUTPUT)
-   * ไม่งั้นขาจะเป็น LOW ชั่วขณะตอนตั้งเป็น OUTPUT
-   * ซึ่งรีเลย์ Active LOW จะตีความว่า "สั่งทำงาน" -> ปั๊มเดินจริง 1 ครั้งทุกครั้งที่บูต */
-  digitalWrite(RELAY1_PIN, RELAY_OFF);
-  digitalWrite(RELAY2_PIN, RELAY_OFF);
-  digitalWrite(RELAY3_PIN, RELAY_OFF);
+  /* สำคัญ : บน ESP32 core 3.x ต้อง pinMode(OUTPUT) ก่อน แล้วค่อย digitalWrite()
+   * ถ้าสลับลำดับ digitalWrite() จะไม่ทำงานเลย (core จะข้ามไปแล้วขึ้น log error)
+   * ทำให้ขาถูกตั้งเป็น OUTPUT ขณะที่ latch ยังเป็น LOW
+   * ซึ่งรีเลย์ Active LOW แปลว่า "สั่งทำงาน" -> รีเลย์ติดทุกตัวตอนบูต
+   * (core 2.x เขียนสลับกันได้ แต่ลำดับนี้ปลอดภัยกับทั้งสองเวอร์ชัน) */
   pinMode(RELAY1_PIN, OUTPUT);
   pinMode(RELAY2_PIN, OUTPUT);
   pinMode(RELAY3_PIN, OUTPUT);
+  digitalWrite(RELAY1_PIN, RELAY_OFF);   // RELAY_OFF = HIGH
+  digitalWrite(RELAY2_PIN, RELAY_OFF);
+  digitalWrite(RELAY3_PIN, RELAY_OFF);
 
   // ปุ่มทั้ง 3 ตัวมี R pull-up 10k บนบอร์ดแล้ว จึงใช้ INPUT เปล่า
   pinMode(SW1_PIN, INPUT);

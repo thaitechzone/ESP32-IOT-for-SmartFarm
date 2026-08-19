@@ -271,11 +271,14 @@ void taskDisplay(uint32_t now) {
 void setup() {
   Serial.begin(115200);
 
-  // ตั้งรีเลย์เป็น OFF ก่อน pinMode เสมอ กันรีเลย์กระตุกตอนบูต
-  digitalWrite(RELAY1_PIN, RELAY_OFF);
-  digitalWrite(RELAY2_PIN, RELAY_OFF);
+  /* ตั้งรีเลย์ให้ OFF (Logic HIGH) ตั้งแต่เริ่มทำงาน
+   * บน ESP32 core 3.x ต้อง pinMode(OUTPUT) ก่อน แล้วค่อย digitalWrite()
+   * ถ้าสลับลำดับ digitalWrite() จะไม่ทำงานเลย (core ข้ามไปแล้วขึ้น log error)
+   * ทำให้ขาเป็น OUTPUT ขณะที่ latch ยังเป็น LOW -> รีเลย์ Active LOW ติดตอนบูต */
   pinMode(RELAY1_PIN, OUTPUT);
   pinMode(RELAY2_PIN, OUTPUT);
+  digitalWrite(RELAY1_PIN, RELAY_OFF);   // RELAY_OFF = HIGH
+  digitalWrite(RELAY2_PIN, RELAY_OFF);
 
   Wire.begin(I2C_SDA, I2C_SCL);
   if (!oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
