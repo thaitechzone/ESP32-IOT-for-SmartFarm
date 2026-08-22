@@ -109,6 +109,16 @@ constexpr float MOISTURE_DIVISOR = 100.0;
 constexpr uint16_t SCAN_FROM = 0x0000;
 constexpr uint16_t SCAN_TO   = 0x0009;
 
+/* โหมดค้นหาอัตโนมัติ (1 = เปิด, 0 = ปิด)
+ * ใช้เมื่ออ่านค่าไม่ได้และสงสัยว่า Slave ID หรือ baud rate ถูกเปลี่ยนมาจากโรงงาน
+ * จะไล่ลองทุก baud ที่เซนเซอร์รุ่นนี้รองรับ (2400/4800/9600 ตามคู่มือหัวข้อ 5.1)
+ * คูณกับ Slave ID 1 ถึง 5 แล้วรายงานคู่ที่ตอบกลับมาบนจอ
+ *
+ * ใช้เวลานานสุดราว 30 วินาที เพราะ ModbusMaster รอ timeout 2 วินาทีต่อครั้ง
+ * ถ้าไล่ครบแล้วยังไม่เจอ แปลว่าปัญหาอยู่ที่ไฟเลี้ยงหรือการต่อสาย ไม่ใช่ค่าพารามิเตอร์ */
+#define AUTO_DETECT_ON_BOOT  1
+constexpr uint8_t DETECT_ID_MAX = 5;
+
 /* debug ทาง UART2 (ต้องต่อ USB-TTL ที่ GPIO25/26 ถึงจะเห็น)
  * ห้ามเปลี่ยนไปใช้ Serial เด็ดขาด เพราะจะไปชนกับ RS485 */
 #define DBG_ENABLE     1
@@ -393,6 +403,102 @@ void scanRegisters() {
 #endif
 
 
+// ==================== โหมดค้นหา Slave ID และ baud rate ====================
+/* ไล่ลองทุกคู่ของ baud rate กับ Slave ID จนกว่าจะเจอตัวที่ตอบกลับมา
+ * ใช้ตอนอ่านค่าไม่ได้ เพื่อแยกว่าเป็นปัญหา "ค่าพารามิเตอร์" หรือ "การต่อสาย"
+ *
+ *   เจอ      -> ค่าพารามิเตอร์ผิด แก้ SLAVE_ID / RS485_BAUDRATE ตามที่จอบอก
+ *   ไม่เจอเลย -> ปัญหาอยู่ที่ไฟเลี้ยง สายเขียว จัมเปอร์ SW Mode หรือสาย A/B
+ *
+ * ทำงานตอนบูตครั้งเดียว จึงยอมให้บล็อกได้ */
+#if AUTO_DETECT_ON_BOOT
+void autoDetect() {
+  const uint32_t bauds[] = { 9600, 4800, 2400 };   // ตามที่คู่มือระบุว่ารองรับ
+
+  for (uint8_t bi = 0; bi < 3; bi++) {
+    /* เปลี่ยน baud rate โดยไม่ต้องปิดแล้วเปิดพอร์ตใหม่
+     * updateBaudRate() เป็นฟังก์ชันเฉพาะของ ESP32 core */
+    RS485.updateBaudRate(bauds[bi]);
+
+    for (uint8_t id = 1; id <= DETECT_ID_MAX; id++) {
+      oled.clearDisplay();
+      oled.setTextSize(1);
+      oled.setCursor(0, 0);
+      oled.print("AUTO DETECT");
+      oled.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+      oled.setTextSize(2);
+      oled.setCursor(0, 16);
+      oled.printf("%lu", (unsigned long)bauds[bi]);
+      oled.setTextSize(1);
+      oled.setCursor(0, 38);
+      oled.printf("trying ID %02X", id);
+      oled.setCursor(0, 52);
+      oled.print("wait up to 30s...");
+      oled.display();
+
+      node.begin(id, RS485);
+      uint8_t r = mbRead(REG_START, 1, USE_FUNC_04);
+      uint16_t v = node.getResponseBuffer(0);
+      node.clearResponseBuffer();
+
+      DBG("DETECT baud %lu id 0x%02X -> %s\n",
+          (unsigned long)bauds[bi], id, mbResultShort(r));
+
+      if (r != node.ku8MBSuccess) continue;
+
+      // ---------- เจอแล้ว ----------
+      oled.clearDisplay();
+      oled.setTextSize(1);
+      oled.setCursor(0, 0);
+      oled.print("SENSOR FOUND!");
+      oled.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+      oled.setCursor(0, 16);
+      oled.printf("baud    %lu", (unsigned long)bauds[bi]);
+      oled.setCursor(0, 26);
+      oled.printf("slaveID 0x%02X", id);
+      oled.setCursor(0, 36);
+      oled.printf("reg     0x%04X", REG_START);
+      oled.setCursor(0, 46);
+      oled.printf("raw %u  = %.1f%%", v, v / MOISTURE_DIVISOR);
+      oled.setCursor(0, 56);
+      oled.print("set these in code");
+      oled.display();
+
+      DBG("พบเซนเซอร์ : baud %lu  ID 0x%02X  raw %u\n",
+          (unsigned long)bauds[bi], id, v);
+
+      delay(10000);        // ค้างไว้ให้จดค่าได้ทัน
+      return;              // ใช้ค่าที่เจอทำงานต่อได้เลยในรอบนี้
+    }
+  }
+
+  // ---------- ไล่ครบแล้วไม่เจอ ----------
+  RS485.updateBaudRate(RS485_BAUDRATE);   // คืนค่าเดิม
+  node.begin(SLAVE_ID, RS485);
+
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(0, 0);
+  oled.print("NOT FOUND");
+  oled.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+  oled.setCursor(0, 15);
+  oled.println("1 Power 12V in?");
+  oled.setCursor(0, 25);
+  oled.println("2 Green wire to GND");
+  oled.setCursor(0, 35);
+  oled.println("3 SW Mode = RS485");
+  oled.setCursor(0, 45);
+  oled.println("4 A+/B- swapped?");
+  oled.setCursor(0, 55);
+  oled.println("5 Unplug USB, use 12V");
+  oled.display();
+
+  DBG("ไล่ครบทุก baud และ ID แล้วไม่พบเซนเซอร์ - ตรวจไฟเลี้ยงและการต่อสาย\n");
+  delay(10000);
+}
+#endif
+
+
 // ================================ SETUP ===================================
 void setup() {
   /* เปิด UART0 ที่ 9600 สำหรับ Modbus โดยเฉพาะ
@@ -441,8 +547,12 @@ void setup() {
   oled.display();
   delay(1200);
 
+#if AUTO_DETECT_ON_BOOT
+  autoDetect();       // ไล่หา baud rate และ Slave ID ที่ถูกต้อง
+#endif
+
 #if SCAN_ON_BOOT
-  scanRegisters();
+  scanRegisters();    // ไล่หาตำแหน่งรีจิสเตอร์
 #endif
 }
 
